@@ -68,6 +68,7 @@
   @media (prefers-reduced-motion: reduce){
     *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
     .confetti{display:none}
+    .countdown.tick{animation:none!important}
   }
   .hero{text-align:center;margin:12px 0 26px}
   .hero h1{font-size:clamp(28px,6vw,44px);font-weight:800;line-height:1.05}
@@ -185,8 +186,45 @@
 
   /* confetti */
   .confetti{position:fixed;inset:0;pointer-events:none;z-index:50}
-  .confetti i{position:absolute;width:9px;height:14px;top:-20px;opacity:.9;animation:fall linear forwards}
-  @keyframes fall{to{transform:translateY(105vh) rotate(720deg);opacity:1}}
+  .confetti i{position:absolute;width:9px;height:14px;top:-20px;opacity:.95;animation:fall linear forwards;border-radius:2px}
+  @keyframes fall{to{transform:translate(var(--dx,0px),110vh) rotate(var(--rot,720deg))}}
+
+  /* full-screen countdown + reveal */
+  [hidden]{display:none!important}
+  body.no-scroll{overflow:hidden}
+  .overlay{
+    position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 42%, rgba(226,38,60,.30), transparent 62%), rgba(21,21,25,.96);
+    padding-block:calc(24px + env(safe-area-inset-top, 0px)) calc(24px + env(safe-area-inset-bottom, 0px));
+    padding-left:max(16px, env(safe-area-inset-left, 0px));
+    padding-right:max(16px, env(safe-area-inset-right, 0px));
+    animation:fade .25s ease;
+  }
+  .countdown{
+    font-family:'Urbanist',sans-serif;font-weight:900;line-height:1;color:#fff;
+    font-size:clamp(160px,38vw,340px);font-variant-numeric:tabular-nums;
+    text-shadow:0 0 80px rgba(226,38,60,.7), 0 0 24px rgba(226,38,60,.5);
+  }
+  .countdown.tick{animation:tick 1s cubic-bezier(.2,.8,.2,1) both}
+  @keyframes tick{
+    0%{opacity:0;transform:scale(1.9)}
+    22%{opacity:1;transform:scale(1)}
+    78%{opacity:1;transform:scale(.94)}
+    100%{opacity:0;transform:scale(.6)}
+  }
+  .reveal{
+    display:flex;flex-direction:column;align-items:center;gap:22px;text-align:center;color:#fff;
+    width:100%;max-width:1000px;max-height:100%;min-width:0;animation:pop .5s cubic-bezier(.2,.8,.2,1);
+  }
+  .reveal-label{font-family:'Urbanist',sans-serif;font-weight:800;font-size:clamp(14px,2.4vw,20px);letter-spacing:.18em;text-transform:uppercase;color:var(--red)}
+  .reveal-list{overflow:auto;max-height:62vh;width:100%;min-width:0}
+  .reveal-single{font-family:'Urbanist',sans-serif;font-weight:900;font-size:clamp(44px,11vw,120px);line-height:1.05;word-break:break-word;text-wrap:balance}
+  .winner-chip.reveal-chip{font-size:clamp(20px,3.6vw,34px);padding:14px 22px}
+  .reveal-close{
+    margin-top:6px;background:#fff;color:var(--ink);border:none;border-radius:999px;cursor:pointer;
+    font-family:'Urbanist',sans-serif;font-weight:800;font-size:16px;padding:12px 28px;transition:.15s;
+  }
+  .reveal-close:hover{background:var(--red-soft)}
   .toast{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%) translateY(20px);background:var(--ink);color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:500;opacity:0;transition:.25s;z-index:60;box-shadow:var(--shadow-lg)}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
@@ -244,6 +282,10 @@
           <span class="switch"><input type="checkbox" id="removeWinners"><span class="slider"></span></span>
           <span>Remover sorteados da lista após o sorteio</span>
         </label>
+        <label class="switch-row">
+          <span class="switch"><input type="checkbox" id="countdownNames" checked><span class="slider"></span></span>
+          <span>Contagem regressiva 3, 2, 1 em tela cheia</span>
+        </label>
       </div>
 
       <button class="btn" id="drawNamesBtn" onclick="drawNames()">
@@ -290,6 +332,10 @@
           <span class="switch"><input type="checkbox" id="sortNums" checked><span class="slider"></span></span>
           <span>Mostrar resultado em ordem crescente</span>
         </label>
+        <label class="switch-row">
+          <span class="switch"><input type="checkbox" id="countdownNums" checked><span class="slider"></span></span>
+          <span>Contagem regressiva 3, 2, 1 em tela cheia</span>
+        </label>
       </div>
 
       <button class="btn" id="drawNumBtn" onclick="drawNumbers()">
@@ -315,6 +361,15 @@
 </main>
 
 <div class="toast" id="toast"></div>
+
+<div class="overlay" id="overlay" hidden role="dialog" aria-modal="true" aria-label="Resultado do sorteio">
+  <div class="countdown" id="countdownNum" aria-live="assertive"></div>
+  <div class="reveal" id="reveal" hidden>
+    <div class="reveal-label" id="revealLabel"></div>
+    <div class="reveal-list" id="revealList"></div>
+    <button class="reveal-close" id="revealClose" type="button">Fechar</button>
+  </div>
+</div>
 
 <script>
   /* ---------- Tabs ---------- */
@@ -385,26 +440,108 @@
   }
 
   /* ---------- Confetti ---------- */
-  function confetti(){
-    const colors=['#E2263C','#151519','#FDECEE','#ffffff','#B81B2E'];
+  // Decorative only, so Math.random is fine here (the draw itself uses crypto)
+  function confetti(count=90, minDur=2.4, maxDur=4.2, maxDelay=0.5){
+    const colors=['#E2263C','#FFFFFF','#FDECEE','#B81B2E','#F25C6E','#151519'];
     const box=document.createElement('div');box.className='confetti';
-    for(let i=0;i<90;i++){
+    for(let i=0;i<count;i++){
       const s=document.createElement('i');
+      const w=6+Math.random()*7;
+      const round=Math.random()<.22;
+      s.style.width=w+'px';
+      s.style.height=(round?w:w*1.5)+'px';
+      if(round) s.style.borderRadius='50%';
       s.style.left=Math.random()*100+'vw';
       s.style.background=colors[i%colors.length];
-      s.style.animationDuration=(2.4+Math.random()*1.8)+'s';
-      s.style.animationDelay=(Math.random()*0.5)+'s';
-      s.style.transform='rotate('+(Math.random()*360)+'deg)';
+      s.style.setProperty('--dx',(Math.random()*180-90)+'px');
+      s.style.setProperty('--rot',((360+Math.random()*1080)*(Math.random()<.5?-1:1))+'deg');
+      s.style.animationDuration=(minDur+Math.random()*(maxDur-minDur))+'s';
+      s.style.animationDelay=(Math.random()*maxDelay)+'s';
       box.appendChild(s);
     }
     document.body.appendChild(box);
-    setTimeout(()=>box.remove(),4200);
+    setTimeout(()=>box.remove(),(maxDur+maxDelay)*1000+400);
+  }
+  // Heavier, longer rain in two waves for the full-screen reveal
+  function confettiRain(){
+    confetti(200,3.2,5.8,1.2);
+    setTimeout(()=>confetti(160,3.2,5.8,1.2),900);
+  }
+
+  /* ---------- Full-screen countdown + reveal ---------- */
+  const overlay=document.getElementById('overlay');
+  const countdownEl=document.getElementById('countdownNum');
+  const revealEl=document.getElementById('reveal');
+  let focusBeforeOverlay=null;
+  function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+  async function runCountdown(){
+    focusBeforeOverlay=document.activeElement;
+    revealEl.hidden=true;
+    countdownEl.hidden=false;
+    overlay.hidden=false;
+    document.body.classList.add('no-scroll');
+    for(const n of [3,2,1]){
+      countdownEl.textContent=n;
+      countdownEl.classList.remove('tick');
+      void countdownEl.offsetWidth; // restart the animation for each number
+      countdownEl.classList.add('tick');
+      await sleep(1000);
+    }
+    countdownEl.hidden=true;
+  }
+  function showReveal(label,items,numbered){
+    document.getElementById('revealLabel').textContent=label;
+    document.getElementById('revealList').innerHTML=resultHTML(items,numbered,true);
+    revealEl.hidden=false;
+    document.getElementById('revealClose').focus();
+  }
+  function closeOverlay(){
+    if(overlay.hidden) return;
+    overlay.hidden=true;
+    document.body.classList.remove('no-scroll');
+    if(focusBeforeOverlay && focusBeforeOverlay.focus) focusBeforeOverlay.focus();
+  }
+  document.getElementById('revealClose').addEventListener('click',closeOverlay);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape' && !overlay.hidden && !revealEl.hidden) closeOverlay();
+  });
+
+  function resultHTML(items,numbered,big){
+    if(items.length===1){
+      return '<div class="'+(big?'reveal-single':'winner')+'">'+esc(items[0])+'</div>';
+    }
+    const chips=items.map((w,i)=>
+      '<div class="winner-chip'+(big?' reveal-chip':'')+'">'+
+      (numbered?'<span class="idx">'+(i+1)+'º</span>':'')+esc(w)+'</div>'
+    ).join('');
+    return '<div class="winners-list">'+chips+'</div>';
+  }
+
+  /* ---------- Shared draw flow ---------- */
+  // The result is decided before any animation starts; the animation is only presentation.
+  async function runDraw({stage,btn,countdown,roll,result}){
+    btn.disabled=true;
+    stage.classList.remove('empty');
+    stage.innerHTML='<div class="stage-label">Sorteando...</div><div class="winner rolling"></div>';
+    const rollEl=stage.querySelector('.winner');
+    const iv=setInterval(()=>{rollEl.textContent=roll();},70);
+    try{
+      if(countdown) await runCountdown(); else await sleep(1500);
+    }finally{
+      clearInterval(iv);
+    }
+    stage.innerHTML='<div class="stage-label">'+esc(result.label)+'</div>'+
+      resultHTML(result.items,result.numbered,false)+copyBtn(result.copyText);
+    if(countdown){ showReveal(result.label,result.items,result.numbered); confettiRain(); }
+    else confetti();
+    result.after();
+    btn.disabled=false;
   }
 
   /* ---------- Draw: NAMES ---------- */
-  let drawingNames=false;
   function drawNames(){
-    if(drawingNames) return;
+    const btn=document.getElementById('drawNamesBtn');
+    if(btn.disabled) return;
     const names=getNames();
     const unique=document.getElementById('noRepeatNames').checked;
     let k=parseInt(document.getElementById('nameWinners').value)||1;
@@ -413,44 +550,29 @@
     if(k>MAX_QTY){ k=MAX_QTY; document.getElementById('nameWinners').value=k; toast('Máximo de '+MAX_QTY.toLocaleString('pt-BR')+' ganhadores por sorteio'); }
     if(unique && k>names.length){ k=names.length; document.getElementById('nameWinners').value=k; toast('Ajustado para '+k+' ganhador(es)'); }
 
-    const stage=document.getElementById('nameStage');
-    const btn=document.getElementById('drawNamesBtn');
     const winners=sample(names,k,unique);
-    drawingNames=true;btn.disabled=true;
-    stage.classList.remove('empty');
-
-    // suspense roll
-    let ticks=0;const total=22;
-    stage.innerHTML='<div class="stage-label">Sorteando...</div><div class="winner rolling" id="rollName"></div>';
-    const roll=document.getElementById('rollName');
-    const iv=setInterval(()=>{
-      roll.textContent=names[randInt(names.length)];
-      ticks++;
-      if(ticks>=total){
-        clearInterval(iv);
-        revealNames(stage,winners);
-        drawingNames=false;btn.disabled=false;
+    runDraw({
+      stage:document.getElementById('nameStage'),
+      btn,
+      countdown:document.getElementById('countdownNames').checked,
+      roll:()=>names[randInt(names.length)],
+      result:{
+        label: winners.length>1 ? winners.length+' Ganhadores' : 'Ganhador',
+        items: winners,
+        numbered: true,
+        copyText: winners.join('\n'),
+        after(){
+          addHistory('nomes', winners.join(' · '), winners.length+(winners.length>1?' nomes':' nome'));
+          if(document.getElementById('removeWinners').checked){
+            // remove one occurrence of each winner from the list
+            const left=getNames();
+            winners.forEach(w=>{const i=left.indexOf(w); if(i>-1) left.splice(i,1);});
+            document.getElementById('names').value=left.join('\n');
+            updateCount();
+          }
+        }
       }
-    },70);
-  }
-  function revealNames(stage,winners){
-    const label= winners.length>1 ? winners.length+' Ganhadores' : 'Ganhador';
-    if(winners.length===1){
-      stage.innerHTML='<div class="stage-label">'+label+'</div><div class="winner">'+esc(winners[0])+'</div>';
-    }else{
-      const chips=winners.map((w,i)=>'<div class="winner-chip"><span class="idx">'+(i+1)+'º</span>'+esc(w)+'</div>').join('');
-      stage.innerHTML='<div class="stage-label">'+label+'</div><div class="winners-list">'+chips+'</div>';
-    }
-    stage.insertAdjacentHTML('beforeend', copyBtn(winners.join('\n')));
-    confetti();
-    addHistory('nomes', winners.join(' · '), winners.length+(winners.length>1?' nomes':' nome'));
-    if(document.getElementById('removeWinners').checked){
-      // remove one occurrence of each winner from the list
-      const left=getNames();
-      winners.forEach(w=>{const i=left.indexOf(w); if(i>-1) left.splice(i,1);});
-      document.getElementById('names').value=left.join('\n');
-      updateCount();
-    }
+    });
   }
   function copyBtn(text){
     return '<button class="copy-btn" data-text="'+esc(text)+'" onclick="copyResult(this)">Copiar resultado</button>';
@@ -467,9 +589,9 @@
   }
 
   /* ---------- Draw: NUMBERS ---------- */
-  let drawingNum=false;
   function drawNumbers(){
-    if(drawingNum) return;
+    const btn=document.getElementById('drawNumBtn');
+    if(btn.disabled) return;
     let min=parseInt(document.getElementById('minNum').value);
     let max=parseInt(document.getElementById('maxNum').value);
     let qty=parseInt(document.getElementById('qtyNum').value)||1;
@@ -482,9 +604,6 @@
     if(qty>MAX_QTY){ qty=MAX_QTY; document.getElementById('qtyNum').value=qty; toast('Máximo de '+MAX_QTY.toLocaleString('pt-BR')+' números por sorteio'); }
     if(!allowRep && qty>range){ qty=range; document.getElementById('qtyNum').value=qty; toast('Ajustado para '+qty+' número(s)'); }
 
-    const stage=document.getElementById('numStage');
-    const btn=document.getElementById('drawNumBtn');
-    // build result
     let results=[];
     if(allowRep){
       for(let i=0;i<qty;i++) results.push(min+randInt(range));
@@ -492,33 +611,21 @@
       results=uniqueInts(min,range,qty);
     }
     if(document.getElementById('sortNums').checked) results.sort((a,b)=>a-b);
-    drawingNum=true;btn.disabled=true;
-    stage.classList.remove('empty');
-
-    let ticks=0;const total=20;
-    stage.innerHTML='<div class="stage-label">Sorteando...</div><div class="winner rolling" id="rollNum"></div>';
-    const roll=document.getElementById('rollNum');
-    const iv=setInterval(()=>{
-      roll.textContent=(min+randInt(range));
-      ticks++;
-      if(ticks>=total){
-        clearInterval(iv);
-        revealNums(stage,results);
-        drawingNum=false;btn.disabled=false;
+    runDraw({
+      stage:document.getElementById('numStage'),
+      btn,
+      countdown:document.getElementById('countdownNums').checked,
+      roll:()=>min+randInt(range),
+      result:{
+        label: results.length>1 ? results.length+' Números sorteados' : 'Número sorteado',
+        items: results,
+        numbered: false,
+        copyText: results.join(', '),
+        after(){
+          addHistory('numeros', results.join(' · '), results.length+(results.length>1?' números':' número'));
+        }
       }
-    },65);
-  }
-  function revealNums(stage,results){
-    const label= results.length>1 ? results.length+' Números sorteados' : 'Número sorteado';
-    if(results.length===1){
-      stage.innerHTML='<div class="stage-label">'+label+'</div><div class="winner">'+results[0]+'</div>';
-    }else{
-      const chips=results.map(n=>'<div class="winner-chip">'+n+'</div>').join('');
-      stage.innerHTML='<div class="stage-label">'+label+'</div><div class="winners-list">'+chips+'</div>';
-    }
-    stage.insertAdjacentHTML('beforeend', copyBtn(results.join(', ')));
-    confetti();
-    addHistory('numeros', results.join(' · '), results.length+(results.length>1?' números':' número'));
+    });
   }
 
   /* ---------- History ---------- */
